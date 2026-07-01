@@ -1,0 +1,434 @@
+import React, { useState, useRef, useEffect } from "react";
+import { Video } from "../types";
+import { motion } from "motion/react";
+import { 
+  Play,
+  Pause,
+  Volume2,
+  VolumeX,
+  Maximize,
+  Tv,
+  Share2,
+  Check
+} from "lucide-react";
+import { getStreamingUrl } from "../utils/googleDrive";
+
+interface VideoPlayerProps {
+  video: Video;
+  isTheaterMode: boolean;
+  setIsTheaterMode: (val: boolean) => void;
+  onProgressUpdate?: (videoId: string, progress: number) => void;
+  onVideoEnded?: () => void;
+  isAdmin?: boolean;
+}
+
+export default function VideoPlayer({
+  video,
+  isTheaterMode,
+  setIsTheaterMode,
+  onProgressUpdate,
+  onVideoEnded,
+  isAdmin = false,
+}: VideoPlayerProps) {
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [progress, setProgress] = useState<number>(0);
+  const [isBuffering, setIsBuffering] = useState<boolean>(false);
+  const [copied, setCopied] = useState<boolean>(false);
+  const [isAutoplay, setIsAutoplay] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem("autoplay_enabled");
+      return saved !== null ? JSON.parse(saved) : true;
+    } catch {
+      return true;
+    }
+  });
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    setIsPlaying(false);
+    setProgress(0);
+    setIsBuffering(false);
+    setCopied(false);
+    
+    // Automatically trigger video play load
+    if (videoRef.current) {
+      videoRef.current.load();
+    }
+  }, [video]);
+
+  const handleShare = async () => {
+    const shareUrl = `${window.location.origin}${window.location.pathname}?v=${video.id}`;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy link:", err);
+    }
+  };
+
+  const handleVideoEnded = () => {
+    setIsPlaying(false);
+    if (isAutoplay && onVideoEnded) {
+      onVideoEnded();
+    }
+  };
+
+  const handlePlayPause = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (isBuffering && isPlaying) return; // Prevent clicks while buffering a playing/seeking video
+    if (video.paused) {
+      setIsBuffering(true);
+      video.play()
+        .then(() => setIsPlaying(true))
+        .catch(err => {
+          console.log("Video autoplay blocked or loading", err);
+          setIsBuffering(false);
+        });
+    } else {
+      video.pause();
+      setIsPlaying(false);
+    }
+  };
+
+  const handleMuteToggle = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = !video.muted;
+    setIsMuted(video.muted);
+  };
+
+  const handleSkip = (seconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const duration = video.duration;
+    if (typeof duration === "number" && isFinite(duration)) {
+      video.currentTime = Math.max(0, Math.min(duration, video.currentTime + seconds));
+    }
+    updateProgress();
+  };
+
+  const handleFullscreenToggle = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(err => console.log("Exit fullscreen failed", err));
+    } else {
+      // Toggle fullscreen on the video player container for standard aspect layout
+      const container = video.parentElement;
+      if (container) {
+        if (container.requestFullscreen) {
+          container.requestFullscreen().catch(() => video.requestFullscreen().catch(err => console.log(err)));
+        } else {
+          video.requestFullscreen().catch(err => console.log(err));
+        }
+      } else {
+        video.requestFullscreen().catch(err => console.log(err));
+      }
+    }
+  };
+
+  // Keyboard Shortcuts (YouTube layout: Space/k to pause, m to mute, f to fullscreen, Left/Right to skip 5s)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing inside text fields
+      const activeEl = document.activeElement;
+      if (
+        activeEl && (
+          activeEl.tagName === "INPUT" ||
+          activeEl.tagName === "TEXTAREA" ||
+          activeEl.getAttribute("contenteditable") === "true"
+        )
+      ) {
+        return;
+      }
+
+      const key = e.key.toLowerCase();
+
+      if (key === " " || key === "k") {
+        e.preventDefault();
+        handlePlayPause();
+      } else if (key === "f") {
+        e.preventDefault();
+        handleFullscreenToggle();
+      } else if (key === "m") {
+        e.preventDefault();
+        handleMuteToggle();
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        handleSkip(-5);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        handleSkip(5);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  const handleProgressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!videoRef.current) return;
+    const value = parseFloat(e.target.value);
+    const duration = videoRef.current.duration;
+    if (typeof duration === "number" && isFinite(duration) && duration > 0) {
+      const newTime = (value / 100) * duration;
+      if (isFinite(newTime)) {
+        videoRef.current.currentTime = newTime;
+      }
+    }
+    setProgress(value);
+    if (onProgressUpdate) {
+      onProgressUpdate(video.id, value);
+    }
+  };
+
+  const updateProgress = () => {
+    if (!videoRef.current) return;
+    const current = videoRef.current.currentTime;
+    const duration = videoRef.current.duration;
+    if (typeof duration === "number" && isFinite(duration) && duration > 0) {
+      const percentage = (current / duration) * 100;
+      setProgress(percentage);
+      if (onProgressUpdate) {
+        onProgressUpdate(video.id, percentage);
+      }
+    }
+  };
+
+  const handleLoadedMetadata = () => {
+    if (!videoRef.current) return;
+    const saved = localStorage.getItem("video_watch_progress");
+    if (saved) {
+      try {
+        const progressMap = JSON.parse(saved);
+        const savedProgress = progressMap[video.id];
+        if (savedProgress && savedProgress > 0 && savedProgress < 99) {
+          const duration = videoRef.current.duration;
+          if (typeof duration === "number" && isFinite(duration) && duration > 0) {
+            const newTime = (savedProgress / 100) * duration;
+            if (isFinite(newTime)) {
+              videoRef.current.currentTime = newTime;
+              setProgress(savedProgress);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Error resuming video progress:", err);
+      }
+    }
+  };
+
+  const handleSpeedChange = (speed: number) => {
+    if (!videoRef.current) return;
+    videoRef.current.playbackRate = speed;
+    setPlaybackSpeed(speed);
+  };
+
+  return (
+    <div className="flex flex-col text-white font-sans">
+      {/* Video Canvas Layer */}
+      <div 
+        className={`relative bg-black overflow-hidden group transition-all duration-300 ${
+          isTheaterMode 
+            ? "aspect-[21/9] w-full max-h-[60vh] border-b border-[#222222]" 
+            : "aspect-video w-full rounded-2xl shadow-2xl border border-[#222222]"
+        }`}
+      >
+        <video
+          ref={videoRef}
+          src={getStreamingUrl(video.videoUrl)}
+          preload="auto"
+          onClick={handlePlayPause}
+          onTimeUpdate={updateProgress}
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => {
+            setIsPlaying(false);
+            setIsBuffering(false);
+          }}
+          onLoadedMetadata={handleLoadedMetadata}
+          onWaiting={() => setIsBuffering(true)}
+          onLoadStart={() => setIsBuffering(true)}
+          onSeeking={() => setIsBuffering(true)}
+          onPlaying={() => setIsBuffering(false)}
+          onCanPlay={() => setIsBuffering(false)}
+          onSeeked={() => setIsBuffering(false)}
+          onError={() => setIsBuffering(false)}
+          onEnded={handleVideoEnded}
+          onContextMenu={(e) => e.preventDefault()}
+          controlsList="nodownload"
+          className="w-full h-full object-contain cursor-pointer"
+          playsInline
+        />
+
+        {/* Loading Spinner Overlay */}
+        {isBuffering && (
+          <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-30 pointer-events-auto cursor-wait select-none">
+            <div className="relative flex items-center justify-center">
+              {/* Outer spinning ring */}
+              <div className="w-16 h-16 rounded-full border-4 border-zinc-800 border-t-red-600 animate-spin"></div>
+              {/* Core pulsing glow */}
+              <div className="absolute w-3.5 h-3.5 rounded-full bg-red-600 animate-pulse"></div>
+            </div>
+            <span className="mt-4 text-xs font-mono tracking-widest text-[#AAAAAA] uppercase animate-pulse">
+              Buffering video stream...
+            </span>
+          </div>
+        )}
+
+        {/* Custom Visual Overlay Banner on Hover or Pause (Only when not buffering) */}
+        {!isBuffering && (!isPlaying || progress === 0) && (
+          <div 
+            onClick={handlePlayPause}
+            className="absolute inset-0 bg-black/40 flex items-center justify-center cursor-pointer transition-all hover:bg-black/25"
+          >
+            <motion.div 
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="p-5 bg-red-600 rounded-full text-white shadow-2xl hover:scale-110 active:scale-95 transition-all duration-200"
+            >
+              <Play className="w-8 h-8 fill-white ml-1" />
+            </motion.div>
+          </div>
+        )}
+
+        {/* Custom Minimal Controls Bar */}
+        <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col gap-2">
+          {/* Progress Bar */}
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={progress}
+            onChange={handleProgressChange}
+            className="yt-slider cursor-pointer focus:outline-none"
+            style={{
+              background: `linear-gradient(to right, #ef4444 0%, #ef4444 ${progress}%, #444444 ${progress}%, #444444 100%)`
+            }}
+          />
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={handlePlayPause}
+                className="p-1 hover:text-red-500 transition-colors"
+              >
+                {isPlaying ? <Pause className="w-5 h-5 fill-white" /> : <Play className="w-5 h-5 fill-white" />}
+              </button>
+
+              <button 
+                onClick={handleMuteToggle}
+                className="p-1 hover:text-red-500 transition-colors"
+              >
+                {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+              </button>
+
+              {/* Speed Buttons */}
+              <div className="flex items-center gap-1.5 text-xs font-mono bg-[#181818]/90 px-2.5 py-0.5 rounded-full border border-[#272727]">
+                <span className="text-[#AAAAAA]">Speed:</span>
+                {[1, 1.5, 2].map(speed => (
+                  <button
+                    key={speed}
+                    onClick={() => handleSpeedChange(speed)}
+                    className={`px-1.5 py-0.5 rounded-md transition-colors cursor-pointer ${
+                      playbackSpeed === speed ? "bg-red-600 text-white font-bold" : "text-[#AAAAAA] hover:text-white"
+                    }`}
+                  >
+                    {speed}x
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={() => setIsTheaterMode(!isTheaterMode)}
+                className={`p-1 hover:text-red-500 transition-colors hidden md:block ${isTheaterMode ? "text-red-500" : "text-zinc-300"}`}
+                title={isTheaterMode ? "Default View" : "Theater Mode"}
+              >
+                <Tv className="w-5 h-5" />
+              </button>
+              
+              <button 
+                onClick={() => {
+                  if (videoRef.current) {
+                    if (document.fullscreenElement) {
+                      document.exitFullscreen();
+                    } else {
+                      videoRef.current.requestFullscreen();
+                    }
+                  }
+                }}
+                className="p-1 hover:text-red-500 transition-colors"
+                title="Fullscreen"
+              >
+                <Maximize className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Video Details Column */}
+      <div className="mt-4 px-1 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-[#222222] pb-4">
+        <h1 className="text-xl font-bold font-sans tracking-tight leading-snug text-[#F1F1F1]">
+          {isAdmin ? video.title : "Exclusive Premium Stream"}
+        </h1>
+        <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
+          {/* Autoplay Toggle */}
+          <div className="flex items-center gap-2.5 bg-[#181818] border border-[#272727] px-3.5 py-1.5 rounded-full h-9 select-none">
+            <span className="text-[10px] text-zinc-400 font-extrabold tracking-wider uppercase">Autoplay</span>
+            <button
+              onClick={() => {
+                const newValue = !isAutoplay;
+                setIsAutoplay(newValue);
+                try {
+                  localStorage.setItem("autoplay_enabled", JSON.stringify(newValue));
+                } catch (e) {
+                  console.error(e);
+                }
+              }}
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-all duration-200 focus:outline-none cursor-pointer ${
+                isAutoplay ? "bg-[#3EA6FF]" : "bg-zinc-800 border border-zinc-700/60"
+              }`}
+              title="Toggle Autoplay next video"
+            >
+              <span
+                className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform duration-200 ${
+                  isAutoplay ? "translate-x-5" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+
+          <button
+            onClick={handleShare}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-full border text-xs font-semibold tracking-wide transition-all cursor-pointer h-9 ${
+              copied
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                : "bg-[#181818] border-[#272727] text-zinc-300 hover:bg-[#272727] hover:text-white"
+            }`}
+          >
+            {copied ? (
+              <>
+                <Check className="w-3.5 h-3.5" />
+                <span>Copied Link!</span>
+              </>
+            ) : (
+              <>
+                <Share2 className="w-3.5 h-3.5 text-[#3EA6FF]" />
+                <span>Share Video</span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
