@@ -1,26 +1,10 @@
-export interface Video {
-  id: string;
-  title: string;
-  description: string;
-  thumbnailUrl: string;
-  videoUrl: string;
-  channelName: string;
-  channelAvatar: string;
-  subscribers: string;
-  views: string;
-  publishedAt: string;
-  duration: string;
-  category: string;
-  likes: string;
-  dislikes: string;
-}
+import {StrictMode} from 'react';
+import {createRoot} from 'react-dom/client';
+import App from './App.tsx';
+import './index.css';
 
-export interface Comment {
-  id: string;
-  authorName: string;
-  authorAvatar: string;
-  text: string;
-  likes: number;
-  publishedAt: string;
-  isLikedByUser?: boolean;
-}
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+);
